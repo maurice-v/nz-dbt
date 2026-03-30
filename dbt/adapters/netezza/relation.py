@@ -26,8 +26,8 @@ class NetezzaPath(Path):
 @dataclass
 class NetezzaQuotePolicy(Policy):
     database: bool = True
-    schema: bool = True
-    identifier: bool = True
+    schema: bool = False
+    identifier: bool = False
 
 
 @dataclass(frozen=True, eq=False, repr=False)
