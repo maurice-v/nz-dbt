@@ -164,6 +164,20 @@ class NetezzaConnectionManager(connection_cls):
         """
         return AdapterResponse("OK", rows_affected=cursor.rowcount)
 
+    def _is_ddl_statement(self, sql: str) -> bool:
+        """Check if SQL contains a DDL statement that requires autocommit on Netezza."""
+        ddl_keywords = ['ALTER', 'CREATE', 'DROP', 'TRUNCATE', 'RENAME']
+        sql_upper = sql.strip().upper()
+        # Check if any DDL keyword starts the SQL or appears after a semicolon
+        for kw in ddl_keywords:
+            if sql_upper.startswith(kw):
+                return True
+            if f';{kw}' in sql_upper.replace(' ', '').replace('\n', ''):
+                return True
+            if f'; {kw}' in sql_upper or f';\n{kw}' in sql_upper:
+                return True
+        return False
+
     # Override to prevent error when calling execute without bindings
     def add_query(
         self,
@@ -173,8 +187,17 @@ class NetezzaConnectionManager(connection_cls):
         abridge_sql_log: bool = False,
     ) -> Tuple[Connection, Any]:
         connection = self.get_thread_connection()
-        if auto_begin and connection.transaction_open is False:
+        is_ddl = self._is_ddl_statement(sql)
+        
+        # DDL statements require autocommit on Netezza
+        if is_ddl:
+            if connection.transaction_open:
+                connection.handle.commit()
+                connection.transaction_open = False
+            connection.handle.autocommit = True
+        elif auto_begin and connection.transaction_open is False:
             self.begin()
+            
         fire_event(ConnectionUsed(conn_type=self.TYPE, conn_name=connection.name))
 
         with self.exception_handler(sql):
@@ -188,11 +211,16 @@ class NetezzaConnectionManager(connection_cls):
 
             cursor = connection.handle.cursor()
 
-            # pyodbc cursor will fail if bindings are passed to execute and not needed
-            if bindings:
-                cursor.execute(sql, bindings)
-            else:
-                cursor.execute(sql)
+            try:
+                # pyodbc cursor will fail if bindings are passed to execute and not needed
+                if bindings:
+                    cursor.execute(sql, bindings)
+                else:
+                    cursor.execute(sql)
+            finally:
+                # Reset autocommit after DDL
+                if is_ddl:
+                    connection.handle.autocommit = False
 
             # Get the result of the first non-empty result set (if any)
             while cursor.description is None:
