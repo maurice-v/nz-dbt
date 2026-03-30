@@ -129,6 +129,7 @@ class NetezzaConnectionManager(connection_cls):
                 password=credentials.password,
                 **connection_args,
             )
+            handle.autocommit = True
             return handle
 
         retryable_exceptions = [
@@ -164,19 +165,22 @@ class NetezzaConnectionManager(connection_cls):
         """
         return AdapterResponse("OK", rows_affected=cursor.rowcount)
 
-    def _is_ddl_statement(self, sql: str) -> bool:
-        """Check if SQL contains a DDL statement that requires autocommit on Netezza."""
-        ddl_keywords = ['ALTER', 'CREATE', 'DROP', 'TRUNCATE', 'RENAME']
-        sql_upper = sql.strip().upper()
-        # Check if any DDL keyword starts the SQL or appears after a semicolon
-        for kw in ddl_keywords:
-            if sql_upper.startswith(kw):
-                return True
-            if f';{kw}' in sql_upper.replace(' ', '').replace('\n', ''):
-                return True
-            if f'; {kw}' in sql_upper or f';\n{kw}' in sql_upper:
-                return True
-        return False
+    # Netezza doesn't support transactional DDL, so we use autocommit=True
+    # and make transaction methods no-ops (similar to Snowflake adapter)
+    def add_begin_query(self, *args, **kwargs):
+        pass
+
+    def add_commit_query(self, *args, **kwargs):
+        pass
+
+    def begin(self):
+        pass
+
+    def commit(self):
+        pass
+
+    def clear_transaction(self):
+        pass
 
     # Override to prevent error when calling execute without bindings
     def add_query(
@@ -187,16 +191,6 @@ class NetezzaConnectionManager(connection_cls):
         abridge_sql_log: bool = False,
     ) -> Tuple[Connection, Any]:
         connection = self.get_thread_connection()
-        is_ddl = self._is_ddl_statement(sql)
-        
-        # DDL statements require autocommit on Netezza
-        if is_ddl:
-            if connection.transaction_open:
-                connection.handle.commit()
-                connection.transaction_open = False
-            connection.handle.autocommit = True
-        elif auto_begin and connection.transaction_open is False:
-            self.begin()
             
         fire_event(ConnectionUsed(conn_type=self.TYPE, conn_name=connection.name))
 
@@ -211,16 +205,11 @@ class NetezzaConnectionManager(connection_cls):
 
             cursor = connection.handle.cursor()
 
-            try:
-                # pyodbc cursor will fail if bindings are passed to execute and not needed
-                if bindings:
-                    cursor.execute(sql, bindings)
-                else:
-                    cursor.execute(sql)
-            finally:
-                # Reset autocommit after DDL
-                if is_ddl:
-                    connection.handle.autocommit = False
+            # pyodbc cursor will fail if bindings are passed to execute and not needed
+            if bindings:
+                cursor.execute(sql, bindings)
+            else:
+                cursor.execute(sql)
 
             # Get the result of the first non-empty result set (if any)
             while cursor.description is None:
