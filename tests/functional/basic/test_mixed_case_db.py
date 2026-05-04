@@ -1,3 +1,5 @@
+import os
+
 from dbt.tests.util import get_manifest
 import pytest
 
@@ -15,8 +17,8 @@ def models():
 
 
 def test_basic(project_root, project):
-    # Verify database name is set (mixed-case handling)
-    assert project.database is not None
+    # Verify database name matches the configured value (mixed-case handling)
+    assert project.database == os.getenv("NZ_TEST_DATABASE", "TESTDBTINTEGRATION")
 
     # Tests that a project with a single model works
     results = run_dbt(["run"])

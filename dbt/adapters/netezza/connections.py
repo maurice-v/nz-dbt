@@ -191,7 +191,7 @@ class NetezzaConnectionManager(connection_cls):
         abridge_sql_log: bool = False,
     ) -> Tuple[Connection, Any]:
         connection = self.get_thread_connection()
-            
+
         fire_event(ConnectionUsed(conn_type=self.TYPE, conn_name=connection.name))
 
         with self.exception_handler(sql):
